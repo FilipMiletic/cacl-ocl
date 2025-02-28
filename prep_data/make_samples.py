@@ -1,6 +1,7 @@
 import argparse
 import os
 import pandas as pd
+from utils import read_pandas
 
 
 def get_acl_volume(acl_id: str) -> str:
@@ -20,16 +21,6 @@ def get_acl_volume(acl_id: str) -> str:
     return vol
 
 
-def read_pandas(path: str) -> pd.DataFrame:
-    """Reads pandas DF, assuming parquet if ends with '.parquet' and
-    pickle otherwise."""
-    if path.endswith('.parquet'):
-        df = pd.read_parquet(path)
-    else:
-        df = pd.read_pickle(path)
-    return df
-
-
 def main():
     desc = ('Make temporal samples of ACL papers, defined as follows: '
             't1: papers from 2020-2022; t2: papers from 07/2023-12/2024')
@@ -41,7 +32,7 @@ def main():
     parser.add_argument('--base-name', help='Base name for output files',
                         default='cacl')
     parser.add_argument('--venues', help='DF mapping volume IDs to venues',
-                        default='aclvolume2venue.parquet')
+                        default='volume2venue.parquet')
     args = parser.parse_args()
 
     # Load corpus files
