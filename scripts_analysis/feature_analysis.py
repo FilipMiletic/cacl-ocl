@@ -119,11 +119,27 @@ def bidirectional_elimination_logistic(X, y, significance_level=0.05, shap_cutof
     mean_shap_values = np.abs(shap_values).mean(axis=0)
     shap_importance = pd.Series(mean_shap_values, index=X.columns).sort_values(ascending=False)
 
-    # Filter features based on SHAP importance cutoff
+    # Select features based on SHAP importance
     selected_features = shap_importance[shap_importance > shap_cutoff].index.tolist()
     X_filtered = X[selected_features]
     print(f"Selected {len(selected_features)} features based on SHAP importance.")
 
+    # Remove multicollinearity
+    correlation = X_filtered.corr().abs()
+    high_corr = set()
+    for i in range(len(correlation.columns)):
+        for j in range(i):
+            if correlation.iloc[i, j] > 0.95:
+                colname = correlation.columns[i]
+                high_corr.add(colname)
+
+    X_filtered = X_filtered.drop(high_corr, axis=1)
+    print(f"Dropped {len(high_corr)} features due to multicollinearity.")
+
+    # Drop constant columns
+    constant_columns = X_filtered.columns[X_filtered.nunique() <= 1]
+    X_filtered = X_filtered.drop(constant_columns, axis=1)
+    print(f"Dropped {len(constant_columns)} constant columns.")
     # Step 2: Bidirectional Elimination
     print("Starting bidirectional elimination...")
 
@@ -136,9 +152,11 @@ def bidirectional_elimination_logistic(X, y, significance_level=0.05, shap_cutof
     seen = set()
     iteration = 0
     max_iter = 100
+    progressbar = tqdm(total=max_iter)
     while improved and iteration < max_iter:
         improved = False
         iteration += 1
+        progressbar.update(1)
 
         # Forward Step
         best_pval = float('inf')
@@ -222,7 +240,7 @@ def write_results(outpath, fold, shap_importance, model_summary, r2_values, fina
     if not os.path.exists(outpath):
         os.makedirs(outpath)
     with open(os.path.join(outpath, f"shap_importance_{fold}.csv"), "w") as f:
-        f.write(shap_importance.to_csv())
+        json.dump(shap_importance, f, indent=4)
     with open(os.path.join(outpath, f"model_summary_{fold}.txt"), "w") as f:
         f.write(model_summary)
     with open(os.path.join(outpath, f"r2_values_{fold}.json"), "w") as f:
