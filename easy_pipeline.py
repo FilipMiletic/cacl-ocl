@@ -19,7 +19,7 @@ def return_sentences_batch(texts):
     sentence_lists = []
 
     # Process texts in batch using nlp.pipe
-    for doc in nlp.pipe(texts, disable=["ner", "tagger"]):  # Disable components not needed for speed
+    for doc in tqdm(nlp.pipe(texts, disable=["ner", "tagger"]), total=len(texts)):  # Disable components not needed for speed
         sentences = [sent.text for sent in doc.sents]
         sentence_lists.append(sentences)
 
