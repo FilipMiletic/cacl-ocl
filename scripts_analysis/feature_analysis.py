@@ -1,10 +1,13 @@
 import os
 from argparse import ArgumentParser
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import shap
 import json
+
+from matplotlib import pyplot as plt
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 from sklearn.preprocessing import StandardScaler
@@ -84,7 +87,15 @@ def get_processed_dataframe(feature_df):
     return feature_df_scaled
 
 
-def bidirectional_elimination_logistic(X, y, significance_level=0.05, shap_cutoff=0.01, output_path='./output'):
+class StatsModelsWrapper:
+    def __init__(self, model):
+        self.model = model
+
+    def predict(self, X):
+        return self.model.predict(X)
+
+
+def bidirectional_elimination_logistic(X, y, output_path, significance_level=0.05, shap_cutoff=0.01):
     """
     Perform Bidirectional Elimination for a Logistic Regression Model with SHAP Filtering and R2 Calculation.
 
@@ -206,6 +217,8 @@ def bidirectional_elimination_logistic(X, y, significance_level=0.05, shap_cutof
 
     # Step 4: Calculate R² Values
     predictions = final_model.predict(sm.add_constant(X_filtered[selected_features]))
+    save_shap_plots(final_model, X_filtered, selected_features, output_path)
+
     log_likelihood = final_model.llf
     null_log_likelihood = sm.Logit(y, np.ones(len(y))).fit(disp=0).llf
     n = len(y)
@@ -231,6 +244,90 @@ def bidirectional_elimination_logistic(X, y, significance_level=0.05, shap_cutof
         'r2_values': r2_values
     }
     return output
+
+
+def plot_forest(model, feature_names, output_path):
+    # Extract coefficients and confidence intervals
+    coefs = model.params[1:]  # Exclude intercept
+    conf = model.conf_int().iloc[1:]  # Exclude intercept
+    conf.columns = ['lower', 'upper']
+
+    # Combine into a DataFrame
+    df = pd.DataFrame({
+        'coef': coefs,
+        'lower': conf['lower'],
+        'upper': conf['upper'],
+        'feature': feature_names
+    }).sort_values(by='coef', ascending=True)
+
+    # Plot the forest plot
+    plt.figure(figsize=(12, len(df) * 1))
+    plt.errorbar(df['coef'], df['feature'], xerr=[df['coef'] - df['lower'], df['upper'] - df['coef']],
+                 fmt='o', color='blue', ecolor='black', capsize=3)
+
+    plt.axvline(x=0, linestyle='--', color='gray', alpha=0.7)  # Add reference line at 0
+    plt.title("Forest Plot of Coefficients with 95% CI")
+    plt.xlabel("Coefficient")
+    plt.ylabel("Feature")
+
+    # Save plot
+    plt.savefig(os.path.join(output_path, "forest_plot.png"), bbox_inches='tight')
+    plt.close()
+
+    print(f"Forest plot saved to {output_path}/forest_plot.png")
+
+
+def save_shap_plots(model, X, selected_features, output_path):
+    """
+    Generate and save SHAP plots for feature importance.
+
+    Args:
+        model: Trained model for SHAP explanations.
+        X (pd.DataFrame): Feature matrix.
+        selected_features (list): List of selected features.
+        output_path (str): Path to save the plots.
+    """
+
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    try:
+        # create a forest plot of the coefficients of the logistic regression model
+        plot_forest(model, selected_features, output_path)
+
+        wrapped_model = StatsModelsWrapper(model)
+
+        if 'const' in model.params.index:
+            X_shap = sm.add_constant(X[selected_features])  # Add constant if needed
+        else:
+            X_shap = X[selected_features]
+
+        explainer = shap.Explainer(wrapped_model.predict, X_shap)
+
+        shap_values = explainer(X_shap)
+        print("successfully generated shap values")
+
+        plt.figure(figsize=(30, 6))
+        shap.plots.bar(shap_values, max_display=30)
+        plt.savefig(os.path.join(output_path, "shap_barplot.png"), bbox_inches='tight')
+        plt.close()  # Close to prevent memory leaks
+
+        plt.figure(figsize=(30, 8))
+        shap.plots.beeswarm(shap_values, order=shap_values.abs.max(0), max_display=30)
+        plt.savefig(os.path.join(output_path, "shap_beeswarm.png"), bbox_inches='tight')
+        plt.close()
+
+        print(f"SHAP plots saved to {output_path}")
+        # create an example of the first instance
+        plt.figure(figsize=(30, 8))
+        shap.plots.waterfall(shap_values[0])
+        plt.savefig(os.path.join(output_path, "shap_waterfall_first_instance.png"), bbox_inches='tight')
+        plt.close()
+
+
+
+    except Exception as e:
+        print(f"An error occurred while generating SHAP plots: {e}")
 
 
 def write_results(outpath, fold, shap_importance, model_summary, r2_values, final_features):
@@ -284,7 +381,7 @@ if __name__ == '__main__':
         if count_class_0 > 3000:
             X_train = pd.concat([X_train[y_train == 0].sample(3000), X_train[y_train == 1].sample(3000)])
             y_train = pd.concat([y_train[y_train == 0].sample(3000), y_train[y_train == 1].sample(3000)])
-        results = bidirectional_elimination_logistic(X_train, y_train, output_path=args.output)
+        results = bidirectional_elimination_logistic(X_train, y_train, output_path=os.path.join(args.output, str(fold)))
         write_results(args.output, fold, results["shap_importance"], results["final_model_summary"],
                       results["r2_values"], results["selected_features"])
         print("Results saved successfully.")
