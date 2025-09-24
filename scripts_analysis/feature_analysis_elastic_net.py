@@ -3,11 +3,12 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
 import statsmodels.api as sm
 from tqdm.asyncio import tqdm
-
+import polars as pl
 from feature_analysis_shap import get_processed_dataframe
 import numpy as np
 import pandas as pd
-
+import pyarrow.parquet as pq
+import shap
 
 def compute_log_likelihood(y_true, y_pred_proba):
     """Compute log-likelihood from predicted probabilities."""
@@ -49,7 +50,10 @@ def robust_feature_selection(X, y, N_OUTER=10, N_INNER=5, SEED=42):
         # outer cross validation split, train on outer_train, test on outer_test
         X_train, X_test = X.iloc[outer_train_idx], X.iloc[outer_test_idx]
         y_train, y_test = y.iloc[outer_train_idx], y.iloc[outer_test_idx]
-
+        print(f"Train size: {X_train.shape}, Test size: {X_test.shape}")
+        #distribution of depdendent variable
+        print(f"Train class distribution: {np.bincount(y_train) / len(y_train)}")
+        print(f"Test class distribution: {np.bincount(y_test) / len(y_test)}")
         # Inner CV is handled by LogisticRegressionCV
         model = LogisticRegressionCV(
             # Cs=10,  # grid of inverse regularization values
@@ -163,8 +167,12 @@ def find_highly_correlated_features(df1, df2, drop_cols=None, threshold=0.9):
     return correlated_sets1, correlated_sets2
 
 
-df1 = pd.read_parquet("/Users/johannesfalk/PycharmProject/cacl-ocl/cacl_t1_features_sample.parquet")
-df2 = pd.read_parquet("/Users/johannesfalk/PycharmProject/cacl-ocl/cacl_t2_features_sample.parquet")
+df1 = pl.read_parquet("/Users/falkne/PycharmProjects/cacl-ocl/cacl_t1_features_sample_30k.parquet")
+print(len(df1))
+df2 = pl.read_parquet("/Users/falkne/PycharmProjects/cacl-ocl/cacl_t2_features_sample_30k.parquet")
+# convert to pandas dataframe
+df1 = df1.to_pandas()
+df2 = df2.to_pandas()
 # subsample only 2000 rows for speed
 # df1 = df1.sample(n=500, random_state=42)
 # df2 = df2.sample(n=500, random_state=42)
@@ -179,6 +187,7 @@ feature_df1["after"] = 0
 feature_df2["after"] = 1
 # combine both dataframes
 feature_df = pd.concat([feature_df1, feature_df2], axis=0)
+# convert to a pandas dataframe
 
 constant_columns = feature_df.columns[feature_df.nunique() <= 1]
 feature_df = feature_df.drop(constant_columns, axis=1)
@@ -193,7 +202,15 @@ correlated_sets1, correlated_sets2 = find_highly_correlated_features(feature_df1
 to_drop = set()
 for s in correlated_sets1 + correlated_sets2:
     to_drop.update(list(s)[1:])  # keep one feature, drop the rest
-feature_df = feature_df.drop(columns=to_drop, errors="ignore")
+# Ensure columns_to_ignore is a set of strings
+columns_to_ignore = to_drop
+columns_to_ignore = set(map(str, columns_to_ignore))
+
+# Ensure feature_df.columns is also treated as strings
+cols_to_drop = set(feature_df.columns).intersection(columns_to_ignore)
+
+feature_df = feature_df.drop(columns=cols_to_drop, errors="ignore")
+
 print(f"Dropped {len(to_drop)} highly correlated columns.")
 print(feature_df.shape)
 target = feature_df["after"]
