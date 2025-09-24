@@ -95,7 +95,7 @@ class StatsModelsWrapper:
         return self.model.predict(X)
 
 
-def bidirectional_elimination_logistic(X, y, output_path, significance_level=0.05, shap_cutoff=0.01):
+def bidirectional_elimination_shap(X, y, output_path, significance_level=0.05, shap_cutoff=0.01):
     """
     Perform Bidirectional Elimination for a Logistic Regression Model with SHAP Filtering and R2 Calculation.
 
@@ -381,7 +381,7 @@ if __name__ == '__main__':
         if count_class_0 > 3000:
             X_train = pd.concat([X_train[y_train == 0].sample(3000), X_train[y_train == 1].sample(3000)])
             y_train = pd.concat([y_train[y_train == 0].sample(3000), y_train[y_train == 1].sample(3000)])
-        results = bidirectional_elimination_logistic(X_train, y_train, output_path=os.path.join(args.output, str(fold)))
+        results = bidirectional_elimination_shap(X_train, y_train, output_path=os.path.join(args.output, str(fold)))
         write_results(args.output, fold, results["shap_importance"], results["final_model_summary"],
                       results["r2_values"], results["selected_features"])
         print("Results saved successfully.")

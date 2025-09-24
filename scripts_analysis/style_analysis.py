@@ -7,7 +7,7 @@ from sklearn.model_selection import KFold
 from tqdm import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
 
-from feature_analysis import get_processed_dataframe
+from feature_analysis_shap import get_processed_dataframe
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
