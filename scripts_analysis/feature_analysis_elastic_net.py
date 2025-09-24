@@ -2,11 +2,11 @@ import argparse
 import numpy as np
 import pandas as pd
 import polars as pl
-from sklearn.linear_model import LogisticRegressionCV
-from sklearn.model_selection import StratifiedKFold
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.metrics import roc_auc_score
 from tqdm.auto import tqdm
-
+from tabulate import tabulate
 from feature_analysis_shap import get_processed_dataframe
 
 
@@ -43,40 +43,51 @@ def robust_feature_selection(X, y, N_OUTER=10, N_INNER=5, SEED=42):
 
     outer_cv = StratifiedKFold(n_splits=N_OUTER, shuffle=True, random_state=SEED)
 
-    for outer_train_idx, outer_test_idx in tqdm(
-        outer_cv.split(X, y), total=N_OUTER, desc="Outer CV"
-    ):
+    # parameter grid
+    Cs = np.logspace(-2, 4, 20)
+    l1_ratios = np.linspace(0, 0.25, 3)
+    param_grid = {"C": Cs, "l1_ratio": l1_ratios}
+
+    for outer_train_idx, outer_test_idx in tqdm(outer_cv.split(X, y), total=N_OUTER, desc="Outer CV"):
         X_train, X_test = X.iloc[outer_train_idx], X.iloc[outer_test_idx]
         y_train, y_test = y.iloc[outer_train_idx], y.iloc[outer_test_idx]
 
-        print(f"Train size: {X_train.shape}, Test size: {X_test.shape}")
-        print(f"Train class distribution: {np.bincount(y_train) / len(y_train)}")
-        print(f"Test class distribution: {np.bincount(y_test) / len(y_test)}")
-
-        model = LogisticRegressionCV(
-            Cs=np.logspace(-6, 6, 30),
-            cv=N_INNER,
+        logreg = LogisticRegression(
             penalty="elasticnet",
             solver="saga",
-            l1_ratios=np.linspace(0, 1, 6),
-            scoring="neg_log_loss",
-            tol=1e-3,
             max_iter=1000,
-            random_state=SEED,
+            tol=1e-3,
+            random_state=SEED
         )
-        model.fit(X_train, y_train)
 
-        # Performance
-        y_pred_proba = model.predict_proba(X_test)[:, 1]
-        auc_scores.append(roc_auc_score(y_test, y_pred_proba))
+        inner_cv = StratifiedKFold(n_splits=N_INNER, shuffle=True, random_state=SEED)
+        grid = GridSearchCV(
+            estimator=logreg,
+            param_grid=param_grid,
+            cv=inner_cv,
+           # scoring="neg_log_loss",
+            scoring="roc_auc",
+            n_jobs=-1,
+            verbose=3  # <--- fold-by-fold logs
+        )
+        grid.fit(X_train, y_train)
+
+        best_model = grid.best_estimator_
+
+        # --- Performance on outer test set ---
+        y_pred_proba = best_model.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, y_pred_proba)
+        auc_scores.append(auc)
 
         r2_mcf, r2_nag = pseudo_r2_measures(y_test, y_pred_proba)
         mcfadden_scores.append(r2_mcf)
         nagelkerke_scores.append(r2_nag)
 
-        # Feature tracking
-        coefs = model.coef_.flatten()
-        print(coefs)
+        # --- Track features ---
+        coefs = best_model.coef_.flatten()
+        print("coefficients of the best model in this fold:")
+        print(pd.Series(coefs, index=features).sort_values(ascending=False).head(10))
+
         for feat, coef in zip(features, coefs):
             if coef != 0:
                 feature_counts[feat] += 1
@@ -139,6 +150,10 @@ def find_highly_correlated_features(df1, df2, drop_cols=None, threshold=0.9):
 def main(args):
     df1 = pl.read_parquet(args.input_t1).to_pandas()
     df2 = pl.read_parquet(args.input_t2).to_pandas()
+    df1 = df1.sample(30000)
+    df2 = df2.sample(30000)
+    print("size of T1 dataframe: ", df1.shape)
+    print("size of T2 dataframe: ", df2.shape)
 
     feature_df1 = get_processed_dataframe(df1).drop(columns=["acl_id", "ID"], errors="ignore")
     feature_df2 = get_processed_dataframe(df2).drop(columns=["acl_id", "ID"], errors="ignore")
@@ -147,6 +162,9 @@ def main(args):
     feature_df2["after"] = 1
 
     feature_df = pd.concat([feature_df1, feature_df2], axis=0)
+    #print(tabulate(feature_df.head(), headers='keys', tablefmt='psql'))
+    print("target distribution:")
+    print(feature_df.after.value_counts())
 
     # Drop constants & NaNs
     constant_columns = feature_df.columns[feature_df.nunique() <= 1]
@@ -156,7 +174,7 @@ def main(args):
     nan_columns = feature_df.columns[feature_df.isna().any()]
     feature_df = feature_df.drop(columns=nan_columns, errors="ignore")
     print(f"Dropped {len(nan_columns)} NaN columns.")
-
+    """
     # Drop highly correlated
     correlated_sets1, correlated_sets2 = find_highly_correlated_features(
         feature_df1, feature_df2, drop_cols=["after"], threshold=0.9
@@ -164,9 +182,11 @@ def main(args):
     to_drop = {col for s in correlated_sets1 + correlated_sets2 for col in list(s)[1:]}
     feature_df = feature_df.drop(columns=to_drop, errors="ignore")
     print(f"Dropped {len(to_drop)} highly correlated columns.")
-
+    """
     target = feature_df["after"]
     feature_df = feature_df.drop(columns=["after"], errors="ignore")
+    print("value counts of the target variable:")
+    print(target.value_counts())
 
     robust_feature_selection(feature_df, target, N_OUTER=args.outer, N_INNER=args.inner, SEED=args.seed)
 
