@@ -32,16 +32,19 @@ def main():
                         help='do not write POS tags')
     parser.add_argument('--lowercase', action='store_true', default=False,
                         help='lowercase all tokens in output')
+    parser.add_argument('--col_name', default='text', help='name of input DF '
+                        'column with text to process, defaults to `text`')
     args = parser.parse_args()
 
     # Print config
     print(f'Processing with {args.processes} processes')
     print('Omitting POS tags:', args.no_pos)
     print('Lowercasing all tokens:', args.lowercase)
+    print('Target column name:', args.col_name)
 
     # Load files
     df = read_pandas(args.in_file)
-    texts = df['text'].tolist()
+    texts = df[args.col_name].tolist()
     print(f'Loaded {len(texts)} sentence windows: {args.in_file}')
 
     # Process texts
